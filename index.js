@@ -1,11 +1,16 @@
 /**
  * BHAI SCAM SHIELD - BACKEND
- * Bus yeh file copy-paste karo
+ * Complete code with express server
  */
 
+const express = require('express');
 const axios = require('axios');
 const NodeCache = require('node-cache');
+
+const app = express();
 const cache = new NodeCache({ stdTTL: 300 });
+
+app.use(express.json());
 
 // Chain helper
 function getScanAPI(chain) {
@@ -245,7 +250,7 @@ function getRiskLevel(score) {
 }
 
 // ==================== MAIN FUNCTION ====================
-exports.scanToken = async (req, res) => {
+app.post('/scan', async (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
   
@@ -310,4 +315,18 @@ exports.scanToken = async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
-};
+});
+
+// ==================== HEALTH CHECK ====================
+app.get('/', (req, res) => {
+  res.json({ 
+    status: '🛡️ Bhai Scam Shield Backend Running',
+    message: 'Use POST /scan with address and chain'
+  });
+});
+
+// ==================== START SERVER ====================
+const port = process.env.PORT || 8080;
+app.listen(port, '0.0.0.0', () => {
+  console.log(`✅ Bhai Scam Shield backend running on port ${port}`);
+});
