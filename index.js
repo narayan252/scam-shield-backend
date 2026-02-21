@@ -1,6 +1,6 @@
 /**
  * BHAI SCAM SHIELD - BACKEND
- * Complete code with express server and CORS fix
+ * Complete code with Etherscan V2 API (single key for all chains)
  */
 
 const express = require('express');
@@ -11,9 +11,9 @@ const NodeCache = require('node-cache');
 const app = express();
 const cache = new NodeCache({ stdTTL: 300 });
 
-// ==================== CORS FIX - IMPORTANT ====================
+// ==================== CORS FIX ====================
 const corsOptions = {
-  origin: '*',  // Allow all origins (for development)
+  origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
   credentials: true,
@@ -21,46 +21,38 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
-// Handle preflight requests
 app.options('*', cors(corsOptions));
-
 app.use(express.json());
 
-// ==================== CHAIN HELPERS ====================
-function getScanAPI(chain) {
-  const apis = {
-    ethereum: 'etherscan',
-    bsc: 'bscscan',
-    polygon: 'polygonscan',
-    arbitrum: 'etherscan',
-    optimism: 'etherscan',
-    base: 'etherscan'
-  };
-  return apis[chain] || 'etherscan';
-}
+// ==================== CHAIN IDs for Etherscan V2 API ====================
+const CHAIN_IDS = {
+    ethereum: '1',
+    bsc: '56',
+    polygon: '137',
+    arbitrum: '42161',
+    optimism: '10',
+    base: '8453'
+};
 
-function getChainId(chain) {
-  const ids = {
-    ethereum: '1', bsc: '56', polygon: '137',
-    arbitrum: '42161', optimism: '10', base: '8453'
-  };
-  return ids[chain] || '1';
-}
+const ETHERSCAN_V2_ENDPOINT = 'https://api.etherscan.io/v2/api';
 
 // ==================== 8 FACTORS ====================
 
 // Factor 1: Honeypot (30%)
 async function checkHoneypot(address, chain) {
   try {
-    const apiName = getScanAPI(chain);
-    const apiKey = process.env[apiName.toUpperCase() + '_KEY'];
-    const endpoint = apiName === 'etherscan' ? 'https://api.etherscan.io/api' :
-                     apiName === 'bscscan' ? 'https://api.bscscan.com/api' :
-                     'https://api.polygonscan.com/api';
+    const chainId = CHAIN_IDS[chain] || '1';
     
-    const response = await axios.get(endpoint, {
-      params: { module: 'account', action: 'tokentx', contractaddress: address, page: 1, offset: 100, apikey: apiKey },
+    const response = await axios.get(ETHERSCAN_V2_ENDPOINT, {
+      params: { 
+        chainid: chainId,
+        module: 'account', 
+        action: 'tokentx', 
+        contractaddress: address, 
+        page: 1, 
+        offset: 100, 
+        apikey: process.env.ETHERSCAN_KEY
+      },
       timeout: 5000
     });
     
@@ -76,7 +68,9 @@ async function checkHoneypot(address, chain) {
     if (buys > 10 && sells === 0) score = 95;
     else if (sells < buys * 0.1) score = 80;
     return { score, weight: 30 };
-  } catch { return { score: 50, weight: 30 }; }
+  } catch { 
+    return { score: 50, weight: 30 }; 
+  }
 }
 
 // Factor 2: Liquidity (20%)
@@ -98,36 +92,65 @@ async function checkLiquidity(address) {
     else score = 20;
     
     return { score, weight: 20 };
-  } catch { return { score: 50, weight: 20 }; }
+  } catch { 
+    return { score: 50, weight: 20 }; 
+  }
 }
 
 // Factor 3: Holders (15%)
 async function checkHolders(address, chain) {
   try {
-    const chainId = getChainId(chain);
-    const response = await axios.get('https://api.chainbase.online/v1/token/holders', {
-      params: { chain_id: chainId, contract_address: address, limit: 20 },
-      headers: { 'x-api-key': process.env.CHAINBASE_KEY },
+    const chainId = CHAIN_IDS[chain] || '1';
+    
+    const response = await axios.get(ETHERSCAN_V2_ENDPOINT, {
+      params: { 
+        chainid: chainId,
+        module: 'token', 
+        action: 'tokenholderlist', 
+        contractaddress: address, 
+        page: 1, 
+        offset: 20, 
+        apikey: process.env.ETHERSCAN_KEY 
+      },
       timeout: 5000
     });
     
-    const holders = response.data.data || [];
-    let score = holders.length < 100 ? 80 : holders.length > 1000 ? 20 : 40;
+    const holders = response.data.result || [];
+    let score = 50;
+    
+    if (holders.length > 0) {
+      if (holders.length < 100) score = 80;
+      else if (holders.length > 1000) score = 20;
+      else score = 40;
+      
+      // Check top 10 concentration
+      const totalSupply = holders.reduce((sum, h) => sum + parseFloat(h.value || 0), 0);
+      if (totalSupply > 0) {
+        const top10Supply = holders.slice(0, 10).reduce((sum, h) => sum + parseFloat(h.value || 0), 0);
+        const top10Percent = (top10Supply / totalSupply) * 100;
+        if (top10Percent > 80) score = 90;
+      }
+    }
+    
     return { score, weight: 15 };
-  } catch { return { score: 50, weight: 15 }; }
+  } catch { 
+    return { score: 50, weight: 15 }; 
+  }
 }
 
 // Factor 4: Contract (15%)
 async function checkContract(address, chain) {
   try {
-    const apiName = getScanAPI(chain);
-    const apiKey = process.env[apiName.toUpperCase() + '_KEY'];
-    const endpoint = apiName === 'etherscan' ? 'https://api.etherscan.io/api' :
-                     apiName === 'bscscan' ? 'https://api.bscscan.com/api' :
-                     'https://api.polygonscan.com/api';
+    const chainId = CHAIN_IDS[chain] || '1';
     
-    const response = await axios.get(endpoint, {
-      params: { module: 'contract', action: 'getsourcecode', address, apikey: apiKey },
+    const response = await axios.get(ETHERSCAN_V2_ENDPOINT, {
+      params: { 
+        chainid: chainId,
+        module: 'contract', 
+        action: 'getsourcecode', 
+        address, 
+        apikey: process.env.ETHERSCAN_KEY 
+      },
       timeout: 5000
     });
     
@@ -139,7 +162,9 @@ async function checkContract(address, chain) {
     if (source.includes('delegatecall')) score += 20;
     
     return { score: Math.min(100, score), weight: 15 };
-  } catch { return { score: 50, weight: 15 }; }
+  } catch { 
+    return { score: 50, weight: 15 }; 
+  }
 }
 
 // Factor 5: Scam DB (10%)
@@ -200,20 +225,27 @@ async function checkSocial(address) {
     
     let score = channels >= 3 ? 20 : channels >= 1 ? 50 : 90;
     return { score, weight: 5 };
-  } catch { return { score: 50, weight: 5 }; }
+  } catch { 
+    return { score: 50, weight: 5 }; 
+  }
 }
 
 // Factor 7: Dev Wallet (3%)
 async function checkDevWallet(address, chain) {
   try {
-    const apiName = getScanAPI(chain);
-    const apiKey = process.env[apiName.toUpperCase() + '_KEY'];
-    const endpoint = apiName === 'etherscan' ? 'https://api.etherscan.io/api' :
-                     apiName === 'bscscan' ? 'https://api.bscscan.com/api' :
-                     'https://api.polygonscan.com/api';
+    const chainId = CHAIN_IDS[chain] || '1';
     
-    const response = await axios.get(endpoint, {
-      params: { module: 'account', action: 'txlist', address, page: 1, offset: 1, sort: 'asc', apikey: apiKey },
+    const response = await axios.get(ETHERSCAN_V2_ENDPOINT, {
+      params: { 
+        chainid: chainId,
+        module: 'account', 
+        action: 'txlist', 
+        address, 
+        page: 1, 
+        offset: 1, 
+        sort: 'asc', 
+        apikey: process.env.ETHERSCAN_KEY 
+      },
       timeout: 5000
     });
     
@@ -221,8 +253,16 @@ async function checkDevWallet(address, chain) {
     let score = 40;
     
     if (creator) {
-      const creatorResponse = await axios.get(endpoint, {
-        params: { module: 'account', action: 'txlist', address: creator, page: 1, offset: 100, apikey: apiKey },
+      const creatorResponse = await axios.get(ETHERSCAN_V2_ENDPOINT, {
+        params: { 
+          chainid: chainId,
+          module: 'account', 
+          action: 'txlist', 
+          address: creator, 
+          page: 1, 
+          offset: 100, 
+          apikey: process.env.ETHERSCAN_KEY 
+        },
         timeout: 5000
       });
       
@@ -238,7 +278,9 @@ async function checkDevWallet(address, chain) {
       else score = 30;
     }
     return { score, weight: 3 };
-  } catch { return { score: 40, weight: 3 }; }
+  } catch { 
+    return { score: 40, weight: 3 }; 
+  }
 }
 
 // Factor 8: Volume (2%)
@@ -254,7 +296,9 @@ async function checkVolume(address) {
     const volume = response.data.data?.[symbol]?.quote?.USD?.volume_24h || 0;
     let score = volume < 1000 ? 80 : 20;
     return { score, weight: 2 };
-  } catch { return { score: 30, weight: 2 }; }
+  } catch { 
+    return { score: 30, weight: 2 }; 
+  }
 }
 
 // Risk Level
@@ -268,7 +312,7 @@ function getRiskLevel(score) {
 
 // ==================== MAIN SCAN ENDPOINT ====================
 app.post('/scan', async (req, res) => {
-  // Set CORS headers explicitly
+  // Set CORS headers
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Accept');
@@ -284,6 +328,8 @@ app.post('/scan', async (req, res) => {
     if (cached) {
       return res.json(cached);
     }
+
+    console.log(`Scanning ${address} on ${chain}...`);
 
     const [honeypot, liquidity, holders, contract, scamdb, social, dev, volume] = await Promise.all([
       checkHoneypot(address, chain),
@@ -308,8 +354,12 @@ app.post('/scan', async (req, res) => {
     );
 
     const apisUsed = [
-      'Etherscan', 'BSCScan', 'PolygonScan', 'CoinMarketCap', 
-      'VirusTotal', 'Google Safe Browsing', 'WhoisFreaks', 'Chainbase'
+      'Etherscan V2',
+      'CoinMarketCap',
+      'VirusTotal',
+      'Google Safe Browsing',
+      'WhoisFreaks',
+      'Chainbase'
     ];
 
     const result = {
@@ -348,7 +398,8 @@ app.get('/', (req, res) => {
     status: '🛡️ Bhai Scam Shield Backend Running',
     message: 'Use POST /scan with address and chain',
     cors: 'enabled',
-    apis: ['Etherscan', 'BSCScan', 'PolygonScan', 'CoinMarketCap', 'VirusTotal', 'Google Safe Browsing', 'WhoisFreaks', 'Chainbase']
+    version: 'V2 API',
+    apis: ['Etherscan V2', 'CoinMarketCap', 'VirusTotal', 'Google Safe Browsing', 'WhoisFreaks', 'Chainbase']
   });
 });
 
@@ -357,4 +408,5 @@ const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
   console.log(`✅ Bhai Scam Shield backend running on port ${port}`);
   console.log(`✅ CORS enabled for all origins`);
+  console.log(`✅ Using Etherscan V2 API with single key`);
 });
