@@ -1,18 +1,33 @@
 /**
  * BHAI SCAM SHIELD - BACKEND
- * Complete code with express server
+ * Complete code with express server and CORS fix
  */
 
 const express = require('express');
+const cors = require('cors');
 const axios = require('axios');
 const NodeCache = require('node-cache');
 
 const app = express();
 const cache = new NodeCache({ stdTTL: 300 });
 
+// ==================== CORS FIX - IMPORTANT ====================
+const corsOptions = {
+  origin: '*',  // Allow all origins (for development)
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
+
 app.use(express.json());
 
-// Chain helper
+// ==================== CHAIN HELPERS ====================
 function getScanAPI(chain) {
   const apis = {
     ethereum: 'etherscan',
@@ -32,6 +47,8 @@ function getChainId(chain) {
   };
   return ids[chain] || '1';
 }
+
+// ==================== 8 FACTORS ====================
 
 // Factor 1: Honeypot (30%)
 async function checkHoneypot(address, chain) {
@@ -249,23 +266,24 @@ function getRiskLevel(score) {
   return '⛔ CRITICAL - SCAM';
 }
 
-// ==================== MAIN FUNCTION ====================
+// ==================== MAIN SCAN ENDPOINT ====================
 app.post('/scan', async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  // Set CORS headers explicitly
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Accept');
   
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('');
-    return;
-  }
-
   try {
     const { address, chain = 'ethereum' } = req.body || {};
-    if (!address) return res.status(400).json({ error: 'Address required' });
+    if (!address) {
+      return res.status(400).json({ error: 'Address required' });
+    }
 
     const cacheKey = `${chain}:${address}`;
     const cached = cache.get(cacheKey);
-    if (cached) return res.json(cached);
+    if (cached) {
+      return res.json(cached);
+    }
 
     const [honeypot, liquidity, holders, contract, scamdb, social, dev, volume] = await Promise.all([
       checkHoneypot(address, chain),
@@ -289,6 +307,11 @@ app.post('/scan', async (req, res) => {
       volume.score * 0.02
     );
 
+    const apisUsed = [
+      'Etherscan', 'BSCScan', 'PolygonScan', 'CoinMarketCap', 
+      'VirusTotal', 'Google Safe Browsing', 'WhoisFreaks', 'Chainbase'
+    ];
+
     const result = {
       success: true,
       scanId: 'SCAN_' + Math.random().toString(36).substr(2, 9).toUpperCase(),
@@ -297,6 +320,7 @@ app.post('/scan', async (req, res) => {
       chain,
       totalRiskScore,
       riskLevel: getRiskLevel(totalRiskScore),
+      apisUsed: apisUsed,
       factors: {
         honeypot: { score: honeypot.score, weight: honeypot.weight },
         liquidity: { score: liquidity.score, weight: liquidity.weight },
@@ -313,6 +337,7 @@ app.post('/scan', async (req, res) => {
     res.json(result);
 
   } catch (error) {
+    console.error('Scan error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -321,7 +346,9 @@ app.post('/scan', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({ 
     status: '🛡️ Bhai Scam Shield Backend Running',
-    message: 'Use POST /scan with address and chain'
+    message: 'Use POST /scan with address and chain',
+    cors: 'enabled',
+    apis: ['Etherscan', 'BSCScan', 'PolygonScan', 'CoinMarketCap', 'VirusTotal', 'Google Safe Browsing', 'WhoisFreaks', 'Chainbase']
   });
 });
 
@@ -329,4 +356,5 @@ app.get('/', (req, res) => {
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
   console.log(`✅ Bhai Scam Shield backend running on port ${port}`);
+  console.log(`✅ CORS enabled for all origins`);
 });
